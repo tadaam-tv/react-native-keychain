@@ -1,28 +1,4 @@
 {
-  "_from": "react-native-keychain@^3.0.0",
-  "_id": "react-native-keychain@3.0.0",
-  "_inBundle": false,
-  "_integrity": "sha512-0incABt1+aXsZvG34mDV57KKanSB+iMHmxvWv+N6lgpNLaSoqrCxazjbZdeqD4qJ7Z+Etp5CLf/4v1aI+sNLBw==",
-  "_location": "/react-native-keychain",
-  "_phantomChildren": {},
-  "_requested": {
-    "type": "range",
-    "registry": true,
-    "raw": "react-native-keychain@^3.0.0",
-    "name": "react-native-keychain",
-    "escapedName": "react-native-keychain",
-    "rawSpec": "^3.0.0",
-    "saveSpec": null,
-    "fetchSpec": "^3.0.0"
-  },
-  "_requiredBy": [
-    "#USER",
-    "/"
-  ],
-  "_resolved": "https://registry.npmjs.org/react-native-keychain/-/react-native-keychain-3.0.0.tgz",
-  "_shasum": "29da1dfa43c2581f76bf9420914fd38a1558cf18",
-  "_spec": "react-native-keychain@^3.0.0",
-  "_where": "/Users/williamvanhaevre/DATA/projects/telenet/ys_app",
   "author": {
     "name": "Joel Arvidsson",
     "email": "joel@oblador.se"
@@ -61,5 +37,5 @@
   "typescript": {
     "definition": "typings/react-native-keychain.d.ts"
   },
-  "version": "3.0.0"
+  "version": "3.0.0-1"
 }
