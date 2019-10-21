@@ -24,7 +24,7 @@ export function getGenericPassword(serviceName) {
   return new Promise( (resolve, reject) => {
     try {
       const data = localStorage.getItem(serviceName);
-      resolve({ password: data});
+      resolve(data ? { password: data } : null);
     } catch (error) {
       reject(error);
     }
