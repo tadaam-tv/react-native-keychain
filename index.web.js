@@ -1,7 +1,13 @@
-export function setGenericPassword(username, password, serviceName) {
+function getOptionsArgument(serviceOrOptions) {
+  return typeof serviceOrOptions === 'object'
+    ? serviceOrOptions.service
+    : serviceOrOptions;
+}
+
+export function setGenericPassword(username, password, serviceOrOptions) {
   return new Promise( (resolve, reject) => {
     try {
-      localStorage.setItem(serviceName, password);
+      localStorage.setItem(getOptionsArgument(serviceOrOptions), password);
       resolve();
     } catch (error) {
       reject(error);
@@ -9,10 +15,10 @@ export function setGenericPassword(username, password, serviceName) {
   }); 
 }
 
-export function resetGenericPassword(serviceName) {
+export function resetGenericPassword(serviceOrOptions) {
   return new Promise( (resolve, reject) => {
     try {
-      localStorage.removeItem(serviceName);
+      localStorage.removeItem(getOptionsArgument(serviceOrOptions));
       resolve();
     } catch (error) {
       reject(error);
@@ -20,10 +26,10 @@ export function resetGenericPassword(serviceName) {
   }); 
 }
 
-export function getGenericPassword(serviceName) {
+export function getGenericPassword(serviceOrOptions) {
   return new Promise( (resolve, reject) => {
     try {
-      const data = localStorage.getItem(serviceName);
+      const data = localStorage.getItem(getOptionsArgument(serviceOrOptions));
       resolve(data ? { password: data } : null);
     } catch (error) {
       reject(error);
