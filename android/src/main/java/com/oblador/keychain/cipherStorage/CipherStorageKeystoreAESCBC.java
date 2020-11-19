@@ -3,196 +3,263 @@ package com.oblador.keychain.cipherStorage;
 import android.annotation.TargetApi;
 import android.os.Build;
 import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyInfo;
 import android.security.keystore.KeyProperties;
-import androidx.annotation.NonNull;
+import android.util.Log;
 
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+
+import com.oblador.keychain.KeychainModule.KnownCiphers;
+import com.oblador.keychain.SecurityLevel;
 import com.oblador.keychain.exceptions.CryptoFailedException;
 import com.oblador.keychain.exceptions.KeyStoreAccessException;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.nio.charset.Charset;
-import java.security.InvalidAlgorithmParameterException;
+import java.security.GeneralSecurityException;
 import java.security.Key;
-import java.security.KeyStore;
-import java.security.KeyStoreException;
-import java.security.NoSuchAlgorithmException;
-import java.security.NoSuchProviderException;
-import java.security.UnrecoverableKeyException;
-import java.security.cert.CertificateException;
-import java.security.spec.AlgorithmParameterSpec;
+import java.security.spec.KeySpec;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.crypto.Cipher;
-import javax.crypto.CipherInputStream;
-import javax.crypto.CipherOutputStream;
 import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.IvParameterSpec;
 
-public class CipherStorageKeystoreAESCBC implements CipherStorage {
-    public static final String CIPHER_STORAGE_NAME = "KeystoreAESCBC";
-    public static final String DEFAULT_SERVICE = "RN_KEYCHAIN_DEFAULT_ALIAS";
-    public static final String KEYSTORE_TYPE = "AndroidKeyStore";
-    public static final String ENCRYPTION_ALGORITHM = KeyProperties.KEY_ALGORITHM_AES;
-    public static final String ENCRYPTION_BLOCK_MODE = KeyProperties.BLOCK_MODE_CBC;
-    public static final String ENCRYPTION_PADDING = KeyProperties.ENCRYPTION_PADDING_PKCS7;
-    public static final String ENCRYPTION_TRANSFORMATION =
-            ENCRYPTION_ALGORITHM + "/" +
-                    ENCRYPTION_BLOCK_MODE + "/" +
-                    ENCRYPTION_PADDING;
-    public static final int ENCRYPTION_KEY_SIZE = 256;
+/**
+ * @see <a href="https://proandroiddev.com/secure-data-in-android-initialization-vector-6ca1c659762c">Secure Data in Android</a>
+ * @see <a href="https://stackoverflow.com/questions/36827352/android-aes-with-keystore-produces-different-cipher-text-with-same-plain-text">AES cipher</a>
+ */
+@TargetApi(Build.VERSION_CODES.M)
+@SuppressWarnings({"unused", "WeakerAccess"})
+public class CipherStorageKeystoreAesCbc extends CipherStorageBase {
+  //region Constants
+  /** AES */
+  public static final String ALGORITHM_AES = KeyProperties.KEY_ALGORITHM_AES;
+  /** CBC */
+  public static final String BLOCK_MODE_CBC = KeyProperties.BLOCK_MODE_CBC;
+  /** PKCS7 */
+  public static final String PADDING_PKCS7 = KeyProperties.ENCRYPTION_PADDING_PKCS7;
+  /** Transformation path. */
+  public static final String ENCRYPTION_TRANSFORMATION =
+    ALGORITHM_AES + "/" + BLOCK_MODE_CBC + "/" + PADDING_PKCS7;
+  /** Key size. */
+  public static final int ENCRYPTION_KEY_SIZE = 256;
 
-    @Override
-    public String getCipherStorageName() {
-        return CIPHER_STORAGE_NAME;
+  public static final String DEFAULT_SERVICE = "RN_KEYCHAIN_DEFAULT_ALIAS";
+  //endregion
+
+  //region Configuration
+  @Override
+  public String getCipherStorageName() {
+    return KnownCiphers.AES;
+  }
+
+  /** API23 is a requirement. */
+  @Override
+  public int getMinSupportedApiLevel() {
+    return Build.VERSION_CODES.M;
+  }
+
+  /** it can guarantee security levels up to SECURE_HARDWARE/SE/StrongBox */
+  @Override
+  public SecurityLevel securityLevel() {
+    return SecurityLevel.SECURE_HARDWARE;
+  }
+
+  /** Biometry is Not Supported. */
+  @Override
+  public boolean isBiometrySupported() {
+    return false;
+  }
+
+  /** AES. */
+  @Override
+  @NonNull
+  protected String getEncryptionAlgorithm() {
+    return ALGORITHM_AES;
+  }
+
+  /** AES/CBC/PKCS7Padding */
+  @NonNull
+  @Override
+  protected String getEncryptionTransformation() {
+    return ENCRYPTION_TRANSFORMATION;
+  }
+
+  /** {@inheritDoc}. Override for saving the compatibility with previous version of lib. */
+  @Override
+  public String getDefaultAliasServiceName() {
+    return DEFAULT_SERVICE;
+  }
+
+  //endregion
+
+  //region Overrides
+  @Override
+  @NonNull
+  public EncryptionResult encrypt(@NonNull final String alias,
+                                  @NonNull final String username,
+                                  @NonNull final String password,
+                                  @NonNull final SecurityLevel level)
+    throws CryptoFailedException {
+
+    throwIfInsufficientLevel(level);
+
+    final String safeAlias = getDefaultAliasIfEmpty(alias, getDefaultAliasServiceName());
+    final AtomicInteger retries = new AtomicInteger(1);
+
+    try {
+      final Key key = extractGeneratedKey(safeAlias, level, retries);
+
+      return new EncryptionResult(
+        encryptString(key, username),
+        encryptString(key, password),
+        this);
+    } catch (GeneralSecurityException e) {
+      throw new CryptoFailedException("Could not encrypt data with alias: " + alias, e);
+    } catch (Throwable fail) {
+      throw new CryptoFailedException("Unknown error with alias: " + alias +
+        ", error: " + fail.getMessage(), fail);
+    }
+  }
+
+  @Override
+  @NonNull
+  public DecryptionResult decrypt(@NonNull final String alias,
+                                  @NonNull final byte[] username,
+                                  @NonNull final byte[] password,
+                                  @NonNull final SecurityLevel level)
+    throws CryptoFailedException {
+
+    throwIfInsufficientLevel(level);
+
+    final String safeAlias = getDefaultAliasIfEmpty(alias, getDefaultAliasServiceName());
+    final AtomicInteger retries = new AtomicInteger(1);
+
+    try {
+      final Key key = extractGeneratedKey(safeAlias, level, retries);
+
+      return new DecryptionResult(
+        decryptBytes(key, username),
+        decryptBytes(key, password),
+        getSecurityLevel(key));
+    } catch (GeneralSecurityException e) {
+      throw new CryptoFailedException("Could not decrypt data with alias: " + alias, e);
+    } catch (Throwable fail) {
+      throw new CryptoFailedException("Unknown error with alias: " + alias +
+        ", error: " + fail.getMessage(), fail);
+    }
+  }
+
+  /** Redirect call to {@link #decrypt(String, byte[], byte[], SecurityLevel)} method. */
+  @Override
+  public void decrypt(@NonNull final DecryptionResultHandler handler,
+                      @NonNull final String service,
+                      @NonNull final byte[] username,
+                      @NonNull final byte[] password,
+                      @NonNull final SecurityLevel level) {
+    try {
+      final DecryptionResult results = decrypt(service, username, password, level);
+
+      handler.onDecrypt(results, null);
+    } catch (Throwable fail) {
+      handler.onDecrypt(null, fail);
+    }
+  }
+  //endregion
+
+  //region Implementation
+
+  /** Get encryption algorithm specification builder instance. */
+  @NonNull
+  @Override
+  protected KeyGenParameterSpec.Builder getKeyGenSpecBuilder(@NonNull final String alias)
+    throws GeneralSecurityException {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+      throw new KeyStoreAccessException("Unsupported API" + Build.VERSION.SDK_INT + " version detected.");
     }
 
-    @Override
-    public int getMinSupportedApiLevel() {
-        return Build.VERSION_CODES.M;
+    final int purposes = KeyProperties.PURPOSE_DECRYPT | KeyProperties.PURPOSE_ENCRYPT;
+
+    return new KeyGenParameterSpec.Builder(alias, purposes)
+      .setBlockModes(BLOCK_MODE_CBC)
+      .setEncryptionPaddings(PADDING_PKCS7)
+      .setRandomizedEncryptionRequired(true)
+      .setKeySize(ENCRYPTION_KEY_SIZE);
+  }
+
+  /** Get information about provided key. */
+  @NonNull
+  @Override
+  protected KeyInfo getKeyInfo(@NonNull final Key key) throws GeneralSecurityException {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+      throw new KeyStoreAccessException("Unsupported API" + Build.VERSION.SDK_INT + " version detected.");
     }
 
-    @TargetApi(Build.VERSION_CODES.M)
-    @Override
-    public EncryptionResult encrypt(@NonNull String service, @NonNull String username, @NonNull String password) throws CryptoFailedException {
-        service = getDefaultServiceIfEmpty(service);
+    final SecretKeyFactory factory = SecretKeyFactory.getInstance(key.getAlgorithm(), KEYSTORE_TYPE);
+    final KeySpec keySpec = factory.getKeySpec((SecretKey) key, KeyInfo.class);
 
-        try {
-            KeyStore keyStore = getKeyStoreAndLoad();
+    return (KeyInfo) keySpec;
+  }
 
-            if (!keyStore.containsAlias(service)) {
-                AlgorithmParameterSpec spec;
-                spec = new KeyGenParameterSpec.Builder(
-                        service,
-                        KeyProperties.PURPOSE_DECRYPT | KeyProperties.PURPOSE_ENCRYPT)
-                        .setBlockModes(ENCRYPTION_BLOCK_MODE)
-                        .setEncryptionPaddings(ENCRYPTION_PADDING)
-                        .setRandomizedEncryptionRequired(true)
-                        //.setUserAuthenticationRequired(true) // Will throw InvalidAlgorithmParameterException if there is no fingerprint enrolled on the device
-                        .setKeySize(ENCRYPTION_KEY_SIZE)
-                        .build();
-
-                KeyGenerator generator = KeyGenerator.getInstance(ENCRYPTION_ALGORITHM, KEYSTORE_TYPE);
-                generator.init(spec);
-
-                generator.generateKey();
-            }
-
-            Key key = keyStore.getKey(service, null);
-
-            byte[] encryptedUsername = encryptString(key, service, username);
-            byte[] encryptedPassword = encryptString(key, service, password);
-
-            return new EncryptionResult(encryptedUsername, encryptedPassword, this);
-        } catch (NoSuchAlgorithmException | InvalidAlgorithmParameterException | NoSuchProviderException | UnrecoverableKeyException e) {
-            throw new CryptoFailedException("Could not encrypt data for service " + service, e);
-        } catch (KeyStoreException | KeyStoreAccessException e) {
-            throw new CryptoFailedException("Could not access Keystore for service " + service, e);
-        } catch (Exception e) {
-            throw new CryptoFailedException("Unknown error: " + e.getMessage(), e);
-        }
+  /** Try to generate key from provided specification. */
+  @NonNull
+  @Override
+  protected Key generateKey(@NonNull final KeyGenParameterSpec spec) throws GeneralSecurityException {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+      throw new KeyStoreAccessException("Unsupported API" + Build.VERSION.SDK_INT + " version detected.");
     }
 
-    @Override
-    public DecryptionResult decrypt(@NonNull String service, @NonNull byte[] username, @NonNull byte[] password) throws CryptoFailedException {
-        service = getDefaultServiceIfEmpty(service);
+    final KeyGenerator generator = KeyGenerator.getInstance(getEncryptionAlgorithm(), KEYSTORE_TYPE);
 
-        try {
-            KeyStore keyStore = getKeyStoreAndLoad();
+    // initialize key generator
+    generator.init(spec);
 
-            Key key = keyStore.getKey(service, null);
+    return generator.generateKey();
+  }
 
-            String decryptedUsername = decryptBytes(key, username);
-            String decryptedPassword = decryptBytes(key, password);
+  /** Decrypt provided bytes to a string. */
+  @NonNull
+  @Override
+  protected String decryptBytes(@NonNull final Key key, @NonNull final byte[] bytes,
+                                @Nullable final DecryptBytesHandler handler)
+    throws GeneralSecurityException, IOException {
+    final Cipher cipher = getCachedInstance();
 
-            return new DecryptionResult(decryptedUsername, decryptedPassword);
-        } catch (KeyStoreException | UnrecoverableKeyException | NoSuchAlgorithmException e) {
-            throw new CryptoFailedException("Could not get key from Keystore", e);
-        } catch (KeyStoreAccessException e) {
-            throw new CryptoFailedException("Could not access Keystore", e);
-        } catch (Exception e) {
-            throw new CryptoFailedException("Unknown error: " + e.getMessage(), e);
-        }
+    try {
+      // read the initialization vector from bytes array
+      final IvParameterSpec iv = IV.readIv(bytes);
+      cipher.init(Cipher.DECRYPT_MODE, key, iv);
+
+      // decrypt the bytes using cipher.doFinal(). Using a CipherInputStream for decryption has historically led to issues
+      // on the Pixel family of devices.
+      // see https://github.com/oblador/react-native-keychain/issues/383
+      byte[] decryptedBytes = cipher.doFinal(bytes, IV.IV_LENGTH, bytes.length - IV.IV_LENGTH);
+      return new String(decryptedBytes, UTF8);
+    } catch (Throwable fail) {
+      Log.w(LOG_TAG, fail.getMessage(), fail);
+
+      throw fail;
     }
+  }
+  //endregion
 
-    @Override
-    public void removeKey(@NonNull String service) throws KeyStoreAccessException {
-        service = getDefaultServiceIfEmpty(service);
+  //region Initialization Vector encrypt/decrypt support
+  @NonNull
+  @Override
+  public byte[] encryptString(@NonNull final Key key, @NonNull final String value)
+    throws GeneralSecurityException, IOException {
 
-        try {
-            KeyStore keyStore = getKeyStoreAndLoad();
+    return encryptString(key, value, IV.encrypt);
+  }
 
-            if (keyStore.containsAlias(service)) {
-                keyStore.deleteEntry(service);
-            }
-        } catch (KeyStoreException e) {
-            throw new KeyStoreAccessException("Failed to access Keystore", e);
-        } catch (Exception e) {
-            throw new KeyStoreAccessException("Unknown error " + e.getMessage(), e);
-        }
-    }
-
-    private byte[] encryptString(Key key, String service, String value) throws CryptoFailedException {
-        try {
-            Cipher cipher = Cipher.getInstance(ENCRYPTION_TRANSFORMATION);
-            cipher.init(Cipher.ENCRYPT_MODE, key);
-            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-            // write initialization vector to the beginning of the stream
-            byte[] iv = cipher.getIV();
-            outputStream.write(iv, 0, iv.length);
-            // encrypt the value using a CipherOutputStream
-            CipherOutputStream cipherOutputStream = new CipherOutputStream(outputStream, cipher);
-            cipherOutputStream.write(value.getBytes("UTF-8"));
-            cipherOutputStream.close();
-            return outputStream.toByteArray();
-        } catch (Exception e) {
-            throw new CryptoFailedException("Could not encrypt value for service " + service, e);
-        }
-    }
-
-    private String decryptBytes(Key key, byte[] bytes) throws CryptoFailedException {
-        try {
-            Cipher cipher = Cipher.getInstance(ENCRYPTION_TRANSFORMATION);
-            ByteArrayInputStream inputStream = new ByteArrayInputStream(bytes);
-            // read the initialization vector from the beginning of the stream
-            IvParameterSpec ivParams = readIvFromStream(inputStream);
-            cipher.init(Cipher.DECRYPT_MODE, key, ivParams);
-            // decrypt the bytes using a CipherInputStream
-            CipherInputStream cipherInputStream = new CipherInputStream(
-                    inputStream, cipher);
-            ByteArrayOutputStream output = new ByteArrayOutputStream();
-            byte[] buffer = new byte[1024];
-            while (true) {
-                int n = cipherInputStream.read(buffer, 0, buffer.length);
-                if (n <= 0) {
-                    break;
-                }
-                output.write(buffer, 0, n);
-            }
-            return new String(output.toByteArray(), Charset.forName("UTF-8"));
-        } catch (Exception e) {
-            throw new CryptoFailedException("Could not decrypt bytes", e);
-        }
-    }
-
-    private IvParameterSpec readIvFromStream(ByteArrayInputStream inputStream) {
-        byte[] iv = new byte[16];
-        inputStream.read(iv, 0, iv.length);
-        return new IvParameterSpec(iv);
-    }
-
-    private KeyStore getKeyStoreAndLoad() throws KeyStoreException, KeyStoreAccessException {
-        try {
-            KeyStore keyStore = KeyStore.getInstance(KEYSTORE_TYPE);
-            keyStore.load(null);
-            return keyStore;
-        } catch (NoSuchAlgorithmException | CertificateException | IOException e) {
-            throw new KeyStoreAccessException("Could not access Keystore", e);
-        }
-    }
-
-    @NonNull
-    private String getDefaultServiceIfEmpty(@NonNull String service) {
-        return service.isEmpty() ? DEFAULT_SERVICE : service;
-    }
+  @NonNull
+  @Override
+  public String decryptBytes(@NonNull final Key key, @NonNull final byte[] bytes)
+    throws GeneralSecurityException, IOException {
+    return decryptBytes(key, bytes, IV.decrypt);
+  }
+  //endregion
 }
